@@ -1,0 +1,28 @@
+DATA TOAD_JUMP;
+INPUT NAME $ 1-9 WEIGHT 10-13 JUMP 14-16;
+DATALINES;
+Lucky    2.3 1.9
+Spot     4.6 2.5
+Tubs     7.1 2.2
+Hop      4.5 3.2
+Noisy    3.8 1.3
+Winner   5.7 2.2
+Freckles 2.9 2.3
+Zeb      4.6 3.0
+Troll    3.4 3.1
+Skip     5.1 1.5
+Chubs    6.0 1.3
+Toby     3.7 1.9
+Ralph    3.1 3.8
+Ropucha  2.8 3.9
+Lester   3.3 2.7
+;
+PROC PRINT DATA = TOAD_JUMP;
+RUN;
+
+PROC UNIVARIATE DATA = TOAD_JUMP;
+  TITLE 'DISTRIBUTION OF FROG WEIGHTS FOR SAMPLE OF 15';
+  HISTOGRAM WEIGHT / VSCALE = COUNT ENDPOINTS = 2 to 8 BY 1;
+RUN;
+QUIT;
+

@@ -1,0 +1,116 @@
+/* Correlation and regression analysis of f1 qualifying and race time deltas 
+	as well as golf course age and difficulty rating */
+
+/* From project 1 */
+DATA QUALI;
+	INPUT DELTA @@;
+	DATALINES;
+		0.123 0.025 0.286 0.779 0.19 0.323 0.225 0.282 0.645 0.072 0.029 0.304 0.044 
+		0.632 0.021 0.145 0.022 0.01 0.065 0.304 0.203 0.228 0.138 0.155 0.236 0.188 
+		0.361 0.084 0.462 1.244
+		;
+RUN;
+
+DATA RACE;
+	INPUT DELTA @@;
+	DATALINES;
+		5.598
+		0.549
+		20.524
+		16.527
+		3.786
+		13.072
+		1.154
+		20.823
+		0.993
+		3.779
+		1.532
+		10.587
+		7.834
+		17.841
+		4.071
+		2.446
+		2.595
+		27.066
+		5.023
+		15.186
+		1.529
+		8.771
+		11.987
+		5.355
+		0.179
+		2.137
+		5.384
+		27.921
+		24.09
+		9.57
+		;
+RUN;
+
+
+DATA RACE_QUALI;
+	MERGE QUALI(RENAME=(DELTA=QUALI_DELTA)) RACE(RENAME=(DELTA=RACE_DELTA));
+RUN;
+
+
+PROC GPLOT DATA=RACE_QUALI;
+	PLOT RACE_DELTA * QUALI_DELTA;
+	TITLE "RACE_DELTA vs QUALI_DELTA";
+RUN;
+QUIT;
+
+PROC CORR DATA=GOLFSRS;
+	VAR YEARBLT RATING;
+RUN;
+
+ODS GRAPHICS ON;
+PROC REG DATA = RACE_QUALI PLOTS=DIAGNOSTICS(STATS=NONE);
+	TITLE "CORRELATION: RACE_DELTA vs QUALI_DELTA";
+	VAR RACE_DELTA QUALI_DELTA;
+	MODEL RACE_DELTA =  QUALI_DELTA;
+RUN;
+
+
+/* Project 2 Data golfsrs.csv */
+/* Table of all data in golfsrs dataset */
+DATA GOLFSRS;
+	INFILE '/home/u63443858/my_shared_file_links/schimiak/golfsrs.csv' DLM=',' DSD;
+	INPUT
+    RN
+    STATE $
+    HOLES
+    TYPE $
+    YEARBLT
+    WKDAY18
+    WKDAY9
+    WKEND18
+    WKEND9
+    BACKTEE
+    RATING
+    PAR
+    CART18
+    CART9
+    CADDY $
+    PRO $
+    ;
+
+PROC PRINT DATA=GOLFSRS;
+RUN;
+
+
+/* Choosing Quantitative Variables YEARBLT and RATING for Corr and Reg*/
+PROC GPLOT DATA=GOLFSRS;
+	PLOT YEARBLT*RATING / haxis = 60 to 75 by 1
+						  vaxis = 1900 to 2000 by 10;
+	TITLE "Golf Course Year Built vs Rating";
+RUN;
+QUIT;
+
+PROC CORR DATA=GOLFSRS;
+	VAR YEARBLT RATING;
+RUN;
+
+PROC REG DATA = GOLFSRS PLOTS = DIAGNOSTICS(STATS=NONE);
+MODEL YEARBLT = RATING;
+RUN;
+QUIT;
