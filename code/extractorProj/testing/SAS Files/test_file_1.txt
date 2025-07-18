@@ -1,0 +1,197 @@
+/* ======================================================================== */
+/* TEST FILE 1: Comprehensive SAS Migration Parsing Test                   */
+/* Contains: %include, %let, macros, DATA steps, PROC steps, edge cases    */
+/* ======================================================================== */
+
+/* 1. %INCLUDE STATEMENTS - Including edge case with non-existent file */
+%include "common_macros.sas";
+%include "nonexistent_file.sas";  /* Edge case: non-existent file */
+
+/* 2. %LET MACRO VARIABLE ASSIGNMENTS */
+%let dataset_name = test_data;
+%let output_dir = /data/output;
+%let file_path = &output_dir./results.csv;
+%let proc_name = means;
+
+/* 3. MULTI-LINE MACRO DEFINITION (Edge case 1) */
+%macro create_summary(
+    input_ds=,
+    output_ds=,
+    var_list=
+    );
+    /* This is a multi-line macro with inline comments */
+    proc means data=&input_ds noprint;
+        var &var_list;
+        output out=&output_ds 
+               mean=mean_
+               std=std_;
+    run;
+%mend create_summary;
+
+/* 4. SIMPLE MACRO DEFINITION */
+%macro simple_print(msg=);
+    %put &msg;
+%mend;
+
+/* 5. DATABASE CONNECTION - LIBNAME with Oracle */
+libname oralib oracle user=testuser password=testpass 
+        server=prod_server schema=analytics;
+
+/* 6. DATA STEP WITH MULTIPLE OUTPUT DATASETS (Edge case 3) */
+data work.dataset_a work.dataset_b;
+    set sashelp.class;
+    if age > 14 then output work.dataset_a;
+    else output work.dataset_b;
+run;
+
+/* 7. DATA STEP WITH ARRAYS AND DO LOOPS (Edge case 10) */
+data work.array_test;
+    array scores{3} math reading science;
+    array grades{3} $1 grade1-grade3;
+    
+    do i = 1 to 3;
+        scores{i} = int(ranuni(123) * 100);
+        if scores{i} >= 90 then grades{i} = 'A';
+        else if scores{i} >= 80 then grades{i} = 'B';
+        else grades{i} = 'C';
+    end;
+    
+    drop i;
+run;
+
+/* 8. DATA STEP WITH MERGE */
+data work.merged_data;
+    merge work.dataset_a(in=a) 
+          work.dataset_b(in=b);
+    by name;
+    if a and b;
+run;
+
+/* 9. DATA STEP REFERENCING NON-EXISTENT LIBREF (Edge case 8) */
+data work.error_test;
+    set badlib.nonexistent_table;
+    /* This should create a missing connection issue */
+run;
+
+/* 10. PROC SQL WITH DATABASE CONNECTION AND PASS-THROUGH */
+proc sql;
+    connect to oracle as ora (user=testuser password=testpass 
+                             server=prod_server);
+    
+    /* Create table from SQL */
+    create table work.sql_output as
+    select * from sashelp.cars
+    where make = 'Toyota';
+    
+    /* Insert into existing table */
+    insert into work.sql_output
+    select * from sashelp.cars
+    where make = 'Honda';
+    
+    /* Pass-through query */
+    select * from connection to ora
+    (select customer_id, sum(amount) as total
+     from sales_table
+     group by customer_id);
+     
+    disconnect from ora;
+quit;
+
+/* 11. PROC SQL WITH MISSING CONNECTION (Edge case 4) */
+proc sql;
+    /* This uses a connection that wasn't established */
+    select * from connection to missing_conn
+    (select * from some_table);
+quit;
+
+/* 12. PROC SORT WITH OUTPUT */
+proc sort data=work.merged_data out=work.sorted_data;
+    by age descending;
+run;
+
+/* Block comment in the middle of procedures */
+/*
+   This is a block comment between procedures
+   to test comment handling
+*/
+
+/* 13. PROC MEANS WITH MACRO VARIABLE OUTPUT (Edge case 9) */
+proc means data=work.sorted_data noprint;
+    var age weight;
+    output out=&dataset_name._summary mean=avg_age avg_weight;
+run;
+
+/* 14. PROC FREQ WITH OUTPUT */
+proc freq data=work.sorted_data;
+    tables sex / out=work.freq_output;
+run;
+
+/* 15. MACRO CALL EMBEDDED IN DATA STATEMENT (Edge case 6) */
+%macro get_dataset_name();
+    embedded_macro_test
+%mend;
+
+data %get_dataset_name();
+    x = 1;
+    y = 2;
+run;
+
+/* 16. MULTI-LINE MACRO CALL (Edge case 1) */
+%create_summary(
+    input_ds=work.sorted_data,
+    output_ds=work.macro_summary,
+    var_list=age height weight
+);
+
+/* 17. PROC TRANSPOSE WITH OUTPUT */
+proc transpose data=work.sorted_data 
+               out=work.transposed_data
+               prefix=measure_;
+    by name;
+    var age height weight;
+run;
+
+/* 18. PROC APPEND */
+proc append base=work.sql_output 
+            data=work.sorted_data;
+run;
+
+/* 19. PROC DATASETS MODIFY */
+proc datasets library=work;
+    modify sql_output;
+        index create name;
+    quit;
+run;
+
+/* 20. PROC IMPORT WITH MACRO VARIABLE PATH (Edge case 7) */
+proc import datafile="&file_path"
+            out=work.imported_data
+            dbms=csv replace;
+run;
+
+/* 21. PROC EXPORT */
+proc export data=work.final_results
+            outfile="/data/export/results.xlsx"
+            dbms=xlsx replace;
+run;
+
+/* 22. STATISTICAL PROC WITH OUTPUT - PROC UNIVARIATE */
+proc univariate data=work.sorted_data;
+    var age;
+    output out=work.univariate_stats 
+           mean=mean_age 
+           std=std_age 
+           median=median_age;
+run;
+
+/* 23. Inline comments within statements */
+data work.inline_comments; /* This has inline comments */
+    set work.sorted_data; /* Reading from sorted data */
+    new_var = age * 2; /* Creating new variable */
+run; /* End of data step */
+
+/* 24. Simple macro calls */
+%simple_print(msg=Processing complete);
+%put Dataset processing finished;
+
+/* End of test file 1 */

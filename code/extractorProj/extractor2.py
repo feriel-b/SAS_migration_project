@@ -2,21 +2,6 @@ import os
 import re
 import pandas as pd
 
-BUILTIN_LIBNAMES = {"work", "sashelp", "sasuser", "maps"}
-
-def extract_libnames(code):
-    """Extracts libnames defined in the code. Returns a set of librefs."""
-    return set(match.group(1).lower() for match in re.finditer(r'libname\s+(\w+)\b', code, re.IGNORECASE))
-
-def extract_librefs_used(code):
-    """Extracts all librefs used as part of libref.table patterns."""
-    librefs = set(
-        match.group(1).lower()
-        for match in re.finditer(r'\b([a-zA-Z_]\w*)\.\w+\b', code)  # Ensure librefs start with a letter or underscore
-    )
-    # Exclude reserved keywords or invalid librefs
-    return {lib for lib in librefs if lib not in BUILTIN_LIBNAMES and not lib.isdigit()}
-
 CONTROL_KEYWORDS = {
     "if", "then", "else", "do", "end", "put", "goto", "abort", "return",
     "symdel", "until", "while", "scan", "substr", "eval", "upcase", "lowcase",
@@ -51,13 +36,17 @@ def extract_all_blocks(code, filepath):
         })
 
     # %MACRO CALLS
-    for name, args in re.findall(r'%(\w+)\s*\((.*?)\)\s*;', code):
-        if name.lower() not in CONTROL_KEYWORDS:
-            rows.append({
-                "statement": f"%{name}({args});",
-                "MACRO_CALL": name,
-                "file_path": filepath
-            })
+        # Add to macro detection:
+    macros = re.finditer(r'%macro\s+(\w+).*?%mend\s+\1', code, re.DOTALL | re.IGNORECASE)
+    for m in macros:
+        rows.append({
+            "statement": m.group(0).splitlines()[0],
+            "MACRO_DEF": m.group(1),
+            "file_path": filepath
+        })
+
+    # Update macro call regex:
+    re.findall(r'%(\w+)\s*(?:\((.*?)\))?\s*;', code)  # Makes parentheses optional
 
     # MERGE
     for block in re.findall(r'data\s+.*?run\s*;', code, flags=re.DOTALL | re.IGNORECASE):
@@ -74,9 +63,9 @@ def extract_all_blocks(code, filepath):
             })
 
     # IMPROVED DATA step WRITE-BACK
-    for match in re.finditer(r'data\s+((?:[\w&]+\.)?[\w&]+)(?:\s*\(.*?\))?\s*;', code, flags=re.IGNORECASE):
+    for match in re.finditer(r'data\s+((?:(?:[\w&]+\.)?[\w&]+(?:\s*\(.*?\))?\s*)+);', code, flags=re.IGNORECASE):
         dataset_name = match.group(1).strip()
-        
+            
         # Skip DATA _NULL_ as it doesn't create datasets
         if dataset_name.lower() != "_null_":
             rows.append({
@@ -93,7 +82,7 @@ def extract_all_blocks(code, filepath):
         first_line = sql_block.strip().splitlines()[0] if sql_block.strip() else "proc sql;"
         rows.append({
             "statement": first_line,
-            "WRITE_BACK": "Yes",
+            "PROC_SQL": "Yes",
             "file_path": filepath
         })
         
@@ -127,7 +116,7 @@ def extract_all_blocks(code, filepath):
                 "tables_sourcejoin": table,
                 "file_path": filepath
             })
-
+        
     # PROC SORT with OUT= (NEW)
     for match in re.finditer(r'proc\s+sort\s+data\s*=\s*([\w&\.]+).*?out\s*=\s*([\w&\.]+)', code, flags=re.IGNORECASE | re.DOTALL):
         output_table = match.group(2)
@@ -195,6 +184,7 @@ def extract_all_blocks(code, filepath):
                 "write_back_type": "PROC_DATASETS_MODIFY",
                 "file_path": filepath
             })
+        
 
     # Generic PROC with OUT= (IMPROVED - catch other statistical procedures)
     procs_with_out = ["univariate", "corr", "reg", "logistic", "glm", "mixed", "genmod", 
@@ -239,14 +229,137 @@ def extract_all_blocks(code, filepath):
             "file_path": filepath
         })
 
+    # DATABASE CONNECTION ANALYSIS
+    db_connections = detect_database_connections(code, filepath)
+    rows.extend(db_connections)
+
+    return rows
+
+def detect_database_connections(code, filepath):
+    """Detect database connections and potential missing connections"""
+    rows = []
+    
+    # Track found connections
+    found_connections = {
+        'libname': [],
+        'proc_sql_connect': [],
+        'proc_datasets_engine': []
+    }
+    
+    # 1. LIBNAME statements with database engines
+    db_engines = ['oracle', 'teradata', 'mysql', 'postgres', 'sqlserver', 'db2', 'netezza', 'sybase', 'odbc', 'oledb']
+    
+    for match in re.finditer(r'libname\s+(\w+)\s+(\w+)(?:\s+.*?)?;', code, flags=re.IGNORECASE | re.DOTALL):
+        libref = match.group(1)
+        engine = match.group(2).lower()
+        
+        if engine in db_engines:
+            found_connections['libname'].append(libref)
+            rows.append({
+                "statement": f"libname {libref} {engine}",
+                "DB_CONNECTION": "Yes",
+                "connection_type": f"LIBNAME_{engine.upper()}",
+                "libref": libref,
+                "engine": engine,
+                "file_path": filepath
+            })
+    
+    # 2. PROC SQL CONNECT statements
+    for match in re.finditer(r'connect\s+to\s+(\w+)(?:\s+.*?)?;', code, flags=re.IGNORECASE | re.DOTALL):
+        engine = match.group(1).lower()
+        found_connections['proc_sql_connect'].append(engine)
+        rows.append({
+            "statement": f"connect to {engine}",
+            "DB_CONNECTION": "Yes",
+            "connection_type": f"PROC_SQL_CONNECT_{engine.upper()}",
+            "engine": engine,
+            "file_path": filepath
+        })
+    
+    # 3. Look for database library references without connections
+    db_table_refs = []
+    
+    # Find all library.table references
+    for match in re.finditer(r'(?:from|join|data|set|merge|update|modify|into)\s+(\w+)\.(\w+)', code, flags=re.IGNORECASE):
+        libref = match.group(1).lower()
+        table = match.group(2)
+        
+        # Skip common SAS libraries
+        if libref not in ['work', 'sashelp', 'sasuser', 'webwork']:
+            db_table_refs.append((libref, table, match.group(0)))
+    
+    # 4. Check for missing connections
+    for libref, table, statement in db_table_refs:
+        # Check if this library has a connection defined
+        has_connection = (
+            libref in [lib.lower() for lib in found_connections['libname']] or
+            any(conn in statement.lower() for conn in found_connections['proc_sql_connect'])
+        )
+        
+        if not has_connection:
+            rows.append({
+                "statement": statement,
+                "referenced_table": f"{libref}.{table}",
+                "libref": libref,
+                "MISSING_CONNECTION": "Yes",
+                "connection_issue": "Library referenced but no connection found",
+                "file_path": filepath
+            })
+    
+    # 5. Look for PROC SQL pass-through without connections
+    passthrough_patterns = [
+        r'select\s+.*?\s+from\s+connection\s+to\s+(\w+)',
+        r'execute\s+\(.*?\)\s+by\s+(\w+)',
+        r'disconnect\s+from\s+(\w+)'
+    ]
+    
+    for pattern in passthrough_patterns:
+        for match in re.finditer(pattern, code, flags=re.IGNORECASE | re.DOTALL):
+            connection_name = match.group(1).lower()
+            
+            # Check if this connection was established
+            if connection_name not in found_connections['proc_sql_connect']:
+                rows.append({
+                    "statement": match.group(0),
+                    "connection_name": connection_name,
+                    "MISSING_CONNECTION": "Yes",
+                    "connection_issue": "Pass-through query without connection",
+                    "file_path": filepath
+                })
+    
+    # 6. Look for database-specific syntax without connections
+    db_syntax_patterns = [
+        (r'bulk\s+insert', 'SQL Server bulk insert without connection'),
+        (r'exec\s+sp_', 'SQL Server stored procedure without connection'),
+        (r'exec\s+dbms_', 'Oracle DBMS package without connection'),
+        (r'select\s+.*?\s+from\s+dual', 'Oracle DUAL table without connection')
+    ]
+    
+    for pattern, description in db_syntax_patterns:
+        for match in re.finditer(pattern, code, flags=re.IGNORECASE):
+            rows.append({
+                "statement": match.group(0),
+                "MISSING_CONNECTION": "Yes",
+                "connection_issue": description,
+                "file_path": filepath
+            })
+    
+    # 7. Summary of connections found
+    if found_connections['libname'] or found_connections['proc_sql_connect']:
+        rows.append({
+            "statement": "Connection Summary",
+            "DB_CONNECTION": "Yes",
+            "connection_type": "SUMMARY",
+            "libname_connections": ', '.join(found_connections['libname']),
+            "sql_connections": ', '.join(found_connections['proc_sql_connect']),
+            "file_path": filepath
+        })
+    
     return rows
 
 def main():
     base_dir = "SAS Files"
     all_results = []
-    all_libnames_defined = set()
-    all_librefs_used = set()
-    libref_usage_map = {}
 
     if not os.path.isdir(base_dir):
         print("❌ 'SAS Files' folder not found.")
@@ -257,38 +370,12 @@ def main():
             path = os.path.join(base_dir, filename)
             print(f"📄 Processing: {filename}")
             code = read_sas_file(path)
-            
-            # Existing code extraction
             all_results.extend(extract_all_blocks(code, path))
-            
-            # NEW: Collect libnames defined
-            libnames = extract_libnames(code)
-            all_libnames_defined.update(libnames)
-            
-            # NEW: Collect librefs used
-            librefs = extract_librefs_used(code)
-            all_librefs_used.update(librefs)
-            for ref in librefs:
-                if ref not in libref_usage_map:
-                    libref_usage_map[ref] = set()
-                libref_usage_map[ref].add(filename)
 
-    # Write your analysis Excel as before
     df = pd.DataFrame(all_results)
+    #print(f"\n📊 Total cols extracted: {df.columns.tolist()}")
     df.to_excel("final_analysis.xlsx", index=False)
     print(f"\n✅ Done! Extracted {len(all_results)} rows into 'final_analysis.xlsx'")
-
-    # --- NEW: Validate librefs vs libnames ---
-    to_check = all_librefs_used - BUILTIN_LIBNAMES
-    missing_libnames = sorted(to_check - all_libnames_defined)
-    if missing_libnames:
-        print("\n🚨 Missing LIBNAME statements for the following librefs (potential DB connection issues):")
-        for libref in missing_libnames:
-            files = ', '.join(libref_usage_map[libref])
-            print(f"  - {libref} (used in: {files})")
-    else:
-        print("\n✅ All used librefs have corresponding LIBNAME statements.")
-
 
 if __name__ == "__main__":
     main()

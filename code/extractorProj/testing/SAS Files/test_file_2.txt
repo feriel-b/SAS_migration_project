@@ -1,0 +1,284 @@
+/* ======================================================================== */
+/* TEST FILE 2: Additional SAS Migration Parsing Test Cases                */
+/* Contains: Additional PROC steps, complex scenarios, remaining edge cases */
+/* ======================================================================== */
+
+/* 1. Additional %INCLUDE and %LET statements */
+%include "shared_utilities.sas";
+%let analysis_year = 2024;
+%let threshold_value = 1000;
+%let export_format = xlsx;
+
+/* 2. Complex multi-line macro with nested procedures */
+%macro comprehensive_analysis(
+    input_table=,
+    output_prefix=,
+    group_var=,
+    analysis_vars=
+    );
+    
+    /* Step 1: Basic statistics */
+    proc means data=&input_table noprint;
+        class &group_var;
+        var &analysis_vars;
+        output out=&output_prefix._means
+               mean= std= min= max= / autoname;
+    run;
+    
+    /* Step 2: Frequency analysis */
+    proc freq data=&input_table;
+        tables &group_var / out=&output_prefix._freq;
+    run;
+    
+    /* Step 3: Correlation analysis */
+    proc corr data=&input_table 
+              out=&output_prefix._corr
+              outp=&output_prefix._corr_pvals;
+        var &analysis_vars;
+    run;
+    
+%mend comprehensive_analysis;
+
+/* 3. Additional database connections */
+libname myteradata teradata user=analytics_user password=secret123
+                   server=teradata_prod database=sales_db;
+
+libname sqlsrv sqlserver datasrc=PROD_SQL server=sql-server-01
+                        database=marketing schema=campaign_data;
+
+/* 4. PROC SQL with complex operations and joins */
+proc sql;
+    /* Create view instead of table */
+    create view work.customer_summary as
+    select customer_id, 
+           sum(order_amount) as total_spent,
+           count(*) as order_count,
+           max(order_date) as last_order_date
+    from myteradata.sales_transactions
+    group by customer_id
+    having calculated total_spent > &threshold_value;
+    
+    /* Join with dimension table */
+    create table work.enriched_customers as
+    select a.*, b.customer_name, b.region
+    from work.customer_summary a
+    inner join sqlsrv.customer_master b
+    on a.customer_id = b.customer_id;
+quit;
+
+/* 5. PROC SQL with missing connection attempt (Edge case 4 continued) */
+proc sql;
+    create table work.missing_conn_test as
+    select * from connection to undefined_db
+    (select product_id, sales_amount 
+     from product_sales 
+     where sales_date > '2024-01-01');
+quit;
+
+/* 6. DATA step with _NULL_ (should not be captured as write-back) */
+data _null_;
+    set work.enriched_customers;
+    put customer_id= total_spent=;
+run;
+
+/* 7. Multiple DATA steps with conditional outputs */
+data work.high_value work.medium_value work.low_value;
+    set work.enriched_customers;
+    if total_spent > 5000 then output work.high_value;
+    else if total_spent > 1000 then output work.medium_value;
+    else output work.low_value;
+run;
+
+/* 8. Advanced PROC SORT with multiple BY variables */
+proc sort data=work.enriched_customers 
+          out=work.customers_sorted 
+          nodupkey;
+    by region descending total_spent customer_name;
+run;
+
+/* 9. PROC SUMMARY (similar to MEANS) with output */
+proc summary data=work.customers_sorted nway;
+    class region;
+    var total_spent order_count;
+    output out=work.regional_summary
+           mean=avg_spent avg_orders
+           sum=total_revenue total_orders
+           n=customer_count;
+run;
+
+/* 10. Statistical procedures with output datasets */
+
+/* PROC CORR with output */
+proc corr data=work.customers_sorted 
+          out=work.correlation_matrix
+          outp=work.correlation_pvalues;
+    var total_spent order_count;
+run;
+
+/* PROC REG with output */
+proc reg data=work.customers_sorted 
+         outest=work.regression_estimates;
+    model total_spent = order_count;
+run;
+
+/* PROC TTEST with output */
+proc ttest data=work.customers_sorted;
+    class region;
+    var total_spent;
+    ods output TTests=work.ttest_results;
+run;
+
+/* PROC GLM with output */
+proc glm data=work.customers_sorted;
+    class region;
+    model total_spent = region;
+    output out=work.glm_residuals predicted=pred residual=resid;
+run;
+
+/* 11. PROC DATASETS with multiple operations */
+proc datasets library=work;
+    /* Modify dataset */
+    modify customers_sorted;
+        index create region;
+        index create customer_id / unique;
+    
+    /* Copy dataset */
+    copy in=work out=work;
+        select enriched_customers;
+        
+    /* Delete datasets */
+    delete temp_dataset1 temp_dataset2;
+quit;
+
+/* 12. Complex macro call with embedded references (Edge case 6 continued) */
+%macro generate_table_name(prefix=, suffix=);
+    &prefix._analysis_&suffix
+%mend;
+
+data %generate_table_name(prefix=customer, suffix=final);
+    set work.customers_sorted;
+    analysis_flag = 1;
+run;
+
+/* 13. PROC IMPORT variations */
+proc import datafile="/data/customer_updates.csv"
+            out=work.customer_updates
+            dbms=csv replace;
+    delimiter=',';
+    getnames=yes;
+run;
+
+/* PROC IMPORT with macro in datafile (Edge case 7 continued) */
+%let import_path = /data/sales_&analysis_year..txt;
+proc import datafile="&import_path"
+            out=work.sales_data
+            dbms=tab replace;
+run;
+
+/* 14. PROC EXPORT variations */
+proc export data=work.regional_summary
+            outfile="/reports/regional_analysis.&export_format"
+            dbms=&export_format replace;
+run;
+
+/* 15. Additional statistical procedures */
+
+/* PROC LOGISTIC with output */
+proc logistic data=work.customers_sorted;
+    model high_value_flag(event='1') = total_spent order_count;
+    output out=work.logistic_predictions predicted=prob;
+run;
+
+/* PROC MIXED with output */
+proc mixed data=work.customers_sorted;
+    class region;
+    model total_spent = order_count;
+    random intercept / subject=region;
+    ods output SolutionF=work.mixed_fixed_effects;
+run;
+
+/* PROC NPAR1WAY with output */
+proc npar1way data=work.customers_sorted wilcoxon;
+    class region;
+    var total_spent;
+    ods output WilcoxonTest=work.wilcoxon_results;
+run;
+
+/* 16. PROC APPEND with force option */
+proc append base=work.all_customers 
+            data=work.customer_updates
+            force;
+run;
+
+/* 17. Complex merge with multiple datasets */
+data work.final_analysis;
+    merge work.customers_sorted(in=a)
+          work.regional_summary(in=b rename=(customer_count=region_count))
+          work.correlation_matrix(in=c keep=customer_id corr_value);
+    by region;
+    if a;
+    merge_flag = cats(put(a,1.), put(b,1.), put(c,1.));
+run;
+
+/* 18. PROC TRANSPOSE with complex options */
+proc transpose data=work.regional_summary 
+               out=work.summary_transposed 
+               prefix=metric_
+               name=statistic;
+    by region;
+    var avg_spent total_revenue customer_count;
+run;
+
+/* 19. Arrays and loops in different context (Edge case 10 continued) */
+data work.calculated_metrics;
+    set work.customers_sorted;
+    
+    array metrics{5} metric1-metric5;
+    array labels{5} $20 label1-label5 
+        ('Total Spent' 'Order Count' 'Avg Order' 'Loyalty Score' 'Risk Score');
+    
+    metric1 = total_spent;
+    metric2 = order_count;
+    metric3 = total_spent / order_count;
+    
+    do i = 1 to 5;
+        if metrics{i} = . then metrics{i} = 0;
+    end;
+    
+    drop i;
+run;
+
+/* 20. References to undefined libraries (Edge case 8 continued) */
+data work.error_prone;
+    set missinglib.phantom_table;
+    calculated_field = existing_field * 2;
+run;
+
+/* 21. Inline and block comments mixed with code (Edge case 2) */
+proc freq data=work.customers_sorted /* Analyzing customer frequency */;
+    tables region*customer_name /* Cross-tabulation */ / 
+           /* Additional options below */
+           out=work.crosstab_results
+           /* Output dataset for further analysis */
+           chisq; /* Chi-square test */
+run;
+
+/*
+Multi-line comment block
+spanning several lines
+between procedures
+*/
+
+/* 22. Final macro calls */
+%comprehensive_analysis(
+    input_table=work.customers_sorted,
+    output_prefix=final,
+    group_var=region,
+    analysis_vars=total_spent order_count
+);
+
+/* 23. Simple macro calls for testing */
+%put Analysis completed for year &analysis_year;
+%put Threshold value used: &threshold_value;
+
+/* End of test file 2 */
